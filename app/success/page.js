@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 
-export default function SuccessPage() {
+function SuccessContent() {
   const searchParams = useSearchParams();
   const sessionId = searchParams.get('session_id');
   const [status, setStatus] = useState('checking');
@@ -57,6 +57,14 @@ export default function SuccessPage() {
       <a href="/" style={styles.btn}>Run full review</a>
       <p style={styles.note}>Paste your bid on the home page and use the full review. Access is tied to this payment.</p>
     </div>
+  );
+}
+
+export default function SuccessPage() {
+  return (
+    <Suspense fallback={<div style={styles.page}>Loading…</div>}>
+      <SuccessContent />
+    </Suspense>
   );
 }
 
