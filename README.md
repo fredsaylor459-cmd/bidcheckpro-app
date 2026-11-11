@@ -13,11 +13,16 @@ cp .env.example .env.local
 npm run dev
 ```
 
-## Deploy to Vercel
+## Paid fulfillment
 
-Push to GitHub and import in Vercel. Add env vars.
+Paid checkout, compare-bids, full-project coverage, and review email are disabled.
+The server refuses an in-memory fulfillment store. A durable store is not configured, so checkout and webhooks fail closed.
 
-## Stripe webhook
+## Tests
 
-Endpoint: `https://your-domain.vercel.app/api/webhook`
-Event: `checkout.session.completed`
+```bash
+npm test
+scripts/test-local.sh
+```
+
+`npm test` uses the in-memory test double and does not need PostgreSQL. `scripts/test-local.sh` runs that suite plus the local PostgreSQL integration tests. Both use synthetic data and do not call Stripe, email, or model hosts. See `db/README.md` for the store guarantee and its limits.

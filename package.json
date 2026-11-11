@@ -5,10 +5,14 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "test": "node --test tests/prelaunch.test.js",
+    "test:pg": "node --test tests/postgres-fulfillment.test.js",
+    "test:ci": "node --test tests/prelaunch.test.js tests/postgres-fulfillment.test.js"
   },
   "dependencies": {
     "next": "^14.2.5",
+    "pg": "^8.23.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "stripe": "^16.2.0"

@@ -1,0 +1,37 @@
+name: prelaunch tests
+
+# Manual only. A push does not run this workflow.
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: bidcheckpro_fulfillment_it
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - name: Migrate disposable local database
+        run: node -e "require('./lib/migrate').applyMigrations(process.env.FULFILLMENT_DATABASE_URL).catch((error) => { console.error(error.message); process.exit(1); })"
+        env:
+          FULFILLMENT_DATABASE_URL: postgresql://postgres@127.0.0.1:5432/bidcheckpro_fulfillment_it
+      - name: Unit and PostgreSQL tests
+        run: npm run test:ci
+        env:
+          FULFILLMENT_DATABASE_URL: postgresql://postgres@127.0.0.1:5432/bidcheckpro_fulfillment_it
+          NEXT_PUBLIC_BASE_URL: http://127.0.0.1:3000
