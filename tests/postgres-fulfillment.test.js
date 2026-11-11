@@ -282,6 +282,65 @@ describe('local PostgreSQL fulfillment', { concurrency: false }, () => {
     assert.equal(sent, 0);
   });
 
+  test('one checkout session is fulfilled once across two event ids', async () => {
+    const created = await handleCheckout({
+      tier: 'compare',
+      bidText: 'Labor $1,000\nMaterials $1,160\nTotal $2,660',
+      secondBidText: 'Labor $1,000\nMaterials $1,160\nTotal $2,160',
+      side: 'receiving',
+      consent: true,
+    });
+    assert.equal(created.status, 200);
+    const bid = await store.getBid(created.json.bidId);
+    assert.equal(bid.amountCents, 14900);
+    assert.match(bid.secondBidText, /2,160/);
+    const messages = [];
+    setEmailTransportForTests({
+      async send(message) {
+        messages.push(message);
+        return { id: 'email_pg_once' };
+      },
+    });
+    const first = completedEvent({
+      id: 'evt_pg_session_a',
+      sessionId: bid.sessionId,
+      bidId: created.json.bidId,
+      amountTotal: 14900,
+      tier: 'compare',
+    });
+    const second = completedEvent({
+      id: 'evt_pg_session_b',
+      sessionId: bid.sessionId,
+      bidId: created.json.bidId,
+      amountTotal: 14900,
+      tier: 'compare',
+    });
+    const signedFirst = sign(first);
+    const signedSecond = sign(second);
+    const firstResult = await handleWebhook(signedFirst.payload, signedFirst.header);
+    const secondResult = await handleWebhook(signedSecond.payload, signedSecond.header);
+    const replay = await handleWebhook(signedFirst.payload, signedFirst.header);
+    assert.equal(firstResult.json.fulfilled, true);
+    assert.equal(secondResult.json.duplicate, true);
+    assert.equal(replay.json.duplicate, true);
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].idempotencyKey, 'fulfillment:evt_pg_session_a');
+    assert.equal((await store.getBid(created.json.bidId)).paymentStatus, 'paid');
+    const client = new Client({ connectionString: databaseUrl });
+    await client.connect();
+    try {
+      const rows = await client.query(
+        'SELECT event_id, delivery_status, checkout_session_id FROM fulfillment_events ORDER BY event_id'
+      );
+      const owners = rows.rows.filter((row) => row.checkout_session_id === bid.sessionId);
+      assert.equal(owners.length, 1);
+      assert.equal(owners[0].event_id, 'evt_pg_session_a');
+      assert.equal(owners[0].delivery_status, 'sent');
+    } finally {
+      await client.end();
+    }
+  });
+
   test('docs state the ledger is not exactly-once email', () => {
     const readme = fs.readFileSync(path.join(__dirname, '..', 'db', 'README.md'), 'utf8');
     assert.match(readme, /not exactly-once/);

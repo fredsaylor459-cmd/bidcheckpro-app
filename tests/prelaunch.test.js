@@ -119,14 +119,49 @@ describe('prelaunch fulfillment gates', { concurrency: false }, () => {
     assert.equal(doubles.store.bidCount(), 0);
   });
 
-  test('unsupported and unknown tiers are refused and do not store a bid', async () => {
-    for (const tier of ['compare', 'full', 'mystery', undefined]) {
-      const result = await handleCheckout({ tier, bidText: LONG_BID, side: 'receiving', consent: true });
+  test('unknown tiers are refused and the three catalog prices are fixed on the server', async () => {
+    for (const tier of ['mystery', undefined, '']) {
+      const result = await handleCheckout({ tier, bidText: LONG_BID, side: 'receiving', consent: true, amount: 100 });
       assert.equal(result.status, 400, `tier ${tier}`);
       assert.equal(result.json.code, 'offer_unavailable');
     }
     assert.equal(doubles.store.bidCount(), 0);
     assert.equal(doubles.gateway.calls.length, 0);
+
+    const compareMissing = await handleCheckout({ tier: 'compare', bidText: LONG_BID, side: 'receiving', consent: true });
+    assert.equal(compareMissing.status, 400);
+    assert.equal(compareMissing.json.code, 'second_bid_required');
+    assert.equal(doubles.store.bidCount(), 0);
+
+    const cases = [
+      ['single', 7900, false],
+      ['compare', 14900, true],
+      ['full', 35900, false],
+    ];
+    for (const [tier, amount, needsSecond] of cases) {
+      const second = `${LONG_BID}\nSECOND_BID_MARKER $40`;
+      const result = await handleCheckout({
+        tier,
+        bidText: LONG_BID,
+        secondBidText: needsSecond ? second : undefined,
+        side: 'receiving',
+        consent: true,
+        amount: 100,
+        price: 100,
+      });
+      assert.equal(result.status, 200, tier);
+      const call = doubles.gateway.calls[doubles.gateway.calls.length - 1];
+      assert.equal(call.amount, amount);
+      assert.equal(call.tier, tier);
+      assert.equal(JSON.stringify(call).includes('SECOND_BID_MARKER'), false);
+      assert.equal(JSON.stringify(call).includes('FULL_BID_MARKER'), false);
+      const stored = await doubles.store.getBid(result.json.bidId);
+      assert.equal(stored.amountCents, amount);
+      assert.equal(stored.tier, tier);
+      assert.equal(stored.currency, 'usd');
+      if (needsSecond) assert.equal(stored.secondBidText, second);
+      else assert.equal(stored.secondBidText, null);
+    }
   });
 
   test('checkout requires consent, keeps the full bid out of Stripe, and returns an unguessable token', async () => {
@@ -506,16 +541,35 @@ describe('prelaunch fulfillment gates', { concurrency: false }, () => {
     assert.equal(JSON.stringify(crashed).includes('synthetic-buyer@example.test'), false);
   });
 
-  test('a non-local database URL stays fail-closed', async () => {
+  test('a missing database URL names the variable, and a hosted TLS URL is accepted', async () => {
+    const { describeDatabaseUrl } = require('../lib/database-url');
     const previous = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';
     delete process.env.FULFILLMENT_DATABASE_URL;
     assert.equal(getFulfillmentStore(), null);
-    process.env.FULFILLMENT_DATABASE_URL = 'postgresql://reviewer:secret@db.example.com:5432/fulfillment';
-    assert.equal(getFulfillmentStore(), null);
     const checkout = await handleCheckout({ tier: 'single', bidText: LONG_BID, side: 'receiving', consent: true });
     assert.equal(checkout.status, 503);
     assert.equal(checkout.json.code, 'fulfillment_unconfigured');
+    assert.match(checkout.json.error, /FULFILLMENT_DATABASE_URL/);
+    assert.equal(JSON.stringify(checkout.json).includes('secret'), false);
+
+    const hosted = describeDatabaseUrl('postgresql://reviewer:secret@ep-example.neon.tech:5432/fulfillment?sslmode=require');
+    assert.equal(hosted.ok, true);
+    assert.equal(hosted.local, false);
+    assert.equal(hosted.requireTls, true);
+    assert.equal(JSON.stringify(hosted).includes('secret'), false);
+
+    const cleartext = describeDatabaseUrl('postgresql://reviewer:secret@ep-example.neon.tech:5432/fulfillment?sslmode=disable');
+    assert.equal(cleartext.ok, false);
+    assert.match(cleartext.error, /TLS/);
+    assert.equal(cleartext.error.includes('secret'), false);
+
+    const missing = describeDatabaseUrl('');
+    assert.equal(missing.ok, false);
+    assert.match(missing.error, /FULFILLMENT_DATABASE_URL/);
+
+    const mysql = describeDatabaseUrl('mysql://localhost/x');
+    assert.equal(mysql.ok, false);
     process.env.NODE_ENV = previous;
     delete process.env.FULFILLMENT_DATABASE_URL;
   });

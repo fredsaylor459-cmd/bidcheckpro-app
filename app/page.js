@@ -4,6 +4,7 @@ import { useState } from 'react';
 
 export default function Home() {
   const [bidText, setBidText] = useState('');
+  const [secondBidText, setSecondBidText] = useState('');
   const [side, setSide] = useState('sending');
   const [consent, setConsent] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -34,12 +35,68 @@ export default function Home() {
     }
   }
 
+  async function runCompare() {
+    setError('');
+    setResult(null);
+    if (!bidText.trim() || !secondBidText.trim()) {
+      setError('Paste two bids to compare.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await fetch('/api/compare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bidText, secondBidText, side, consent }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed');
+      setResult(data);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function startCheckout(tier) {
+    setError('');
+    if (!bidText.trim()) {
+      setError('Paste a bid first.');
+      return;
+    }
+    if (tier === 'compare' && !secondBidText.trim()) {
+      setError('Paste a second bid to compare.');
+      return;
+    }
+    if (!consent) {
+      setError('Consent is required before the bid is stored.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await fetch('/api/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tier, bidText, secondBidText, side, consent }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.url) throw new Error(data.error || 'Checkout failed');
+      if (data.accessToken) sessionStorage.setItem('bidcheckpro.accessToken', data.accessToken);
+      if (data.bidId) sessionStorage.setItem('bidcheckpro.bidId', data.bidId);
+      window.location.href = data.url;
+    } catch (e) {
+      setError(e.message);
+      setLoading(false);
+    }
+  }
+
   return (
     <main style={styles.main}>
       <div style={styles.wrap}>
         <h1 style={styles.h1}>BidCheckPro</h1>
         <p style={styles.lede}>
-          Paste a bid. Get a preview that flags soft numbers, missing items, high labor, and vague allowances.
+          Paste a bid. Get a preview that flags soft numbers, missing items, high labor, vague allowances, and totals that do not match the line items.
           Built on 36 years of trades experience.
         </p>
 
@@ -54,7 +111,15 @@ export default function Home() {
           <textarea
             value={bidText}
             onChange={(e) => setBidText(e.target.value)}
-            placeholder="Demo & haul-off ........ 1 ls  $1,850&#10;Framing labor ........ 240 hr  $65  $15,600&#10;Cabinet install ...... 1 ls  $3,400&#10;Drywall & finish ..... 62 sh  $78  $4,836&#10;Electrical rough ..... 1 ls  $2,900&#10;Contingency .......... open"
+            placeholder="Labor $1,000&#10;Materials $800&#10;Electrical $360&#10;Total $2,660"
+            style={styles.textarea}
+          />
+
+          <label style={styles.label}>Second bid, for a comparison</label>
+          <textarea
+            value={secondBidText}
+            onChange={(e) => setSecondBidText(e.target.value)}
+            placeholder="Labor $1,000&#10;Materials $800&#10;Electrical $360&#10;Total $2,160"
             style={styles.textarea}
           />
 
@@ -71,9 +136,12 @@ export default function Home() {
             <button type="button" onClick={runPreview} disabled={loading} style={styles.btn}>
               {loading ? 'Reviewing…' : 'Free preview'}
             </button>
+            <button type="button" onClick={runCompare} disabled={loading} style={styles.btn}>
+              Compare these two bids
+            </button>
           </div>
           <p style={styles.note}>
-            Without consent, the preview stays on this server and is not sent to a model. Paid checkout is turned off.
+            Without consent, the preview stays on this server and is not sent to a model. Checkout prices are fixed on the server at $79, $149, and $359.
           </p>
           {error && <p style={styles.error}>{error}</p>}
         </div>
@@ -83,6 +151,12 @@ export default function Home() {
             <h2>Review</h2>
             {result.preview && <p style={styles.note}>Free preview.</p>}
             <p><strong>Summary:</strong> {result.summary}</p>
+            {result.comparison && (
+              <p style={styles.note}>
+                Bid A {formatCents(result.comparison.bidACents)} · Bid B {formatCents(result.comparison.bidBCents)}
+                {result.comparison.differenceCents != null ? ` · difference ${formatCents(result.comparison.differenceCents)}` : ''}
+              </p>
+            )}
             <div>
               {result.flags?.map((f, i) => (
                 <div key={i} style={styles.flag}>
@@ -105,25 +179,31 @@ export default function Home() {
           <div style={styles.plan}>
             <h3>Single bid</h3>
             <div style={styles.price}>$79</div>
-            <p>Paid checkout is turned off.</p>
-            <button type="button" disabled style={styles.btnDisabled}>Unavailable</button>
+            <p>One full line-by-line review</p>
+            <button type="button" onClick={() => startCheckout('single')} style={styles.btn}>Check one bid</button>
           </div>
           <div style={styles.plan}>
             <h3>Compare bids</h3>
             <div style={styles.price}>$149</div>
-            <p>Not available.</p>
-            <button type="button" disabled style={styles.btnDisabled}>Not available</button>
+            <p>Two bids, totals, and scope differences</p>
+            <button type="button" onClick={() => startCheckout('compare')} style={styles.btn}>Compare my bids</button>
           </div>
           <div style={styles.plan}>
             <h3>Full project</h3>
             <div style={styles.price}>$359</div>
-            <p>Not available.</p>
-            <button type="button" disabled style={styles.btnDisabled}>Not available</button>
+            <p>Change orders and the draw schedule</p>
+            <button type="button" onClick={() => startCheckout('full')} style={styles.btn}>Cover my project</button>
           </div>
         </div>
       </div>
     </main>
   );
+}
+
+function formatCents(cents) {
+  if (cents == null) return 'n/a';
+  if (cents % 100 === 0) return `$${cents / 100}`;
+  return `$${(cents / 100).toFixed(2)}`;
 }
 
 const styles = {
@@ -135,10 +215,9 @@ const styles = {
   label: { display: 'block', margin: '12px 0 4px', fontWeight: 600 },
   consent: { display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 12, fontSize: 14 },
   input: { width: '100%', padding: 10, border: '1px solid #c9c5b8', borderRadius: 4, font: 'inherit', boxSizing: 'border-box' },
-  textarea: { width: '100%', minHeight: 180, padding: 12, border: '1px solid #c9c5b8', borderRadius: 4, fontFamily: 'ui-monospace, monospace', fontSize: 13, boxSizing: 'border-box' },
+  textarea: { width: '100%', minHeight: 140, padding: 12, border: '1px solid #c9c5b8', borderRadius: 4, fontFamily: 'ui-monospace, monospace', fontSize: 13, boxSizing: 'border-box' },
   actions: { display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' },
   btn: { background: '#111', color: '#fff', border: 0, padding: '12px 18px', borderRadius: 4, cursor: 'pointer', fontWeight: 600 },
-  btnDisabled: { background: '#d9d6cc', color: '#5c5a54', border: 0, padding: '12px 18px', borderRadius: 4, fontWeight: 600 },
   error: { color: '#b42318', marginTop: 8 },
   result: { background: '#f6f4ee', border: '1px solid #c9c5b8', borderRadius: 8, padding: 20, marginTop: 16 },
   flag: { background: '#f8ece9', borderLeft: '3px solid #b42318', padding: '10px 12px', margin: '8px 0' },
