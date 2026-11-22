@@ -122,6 +122,39 @@ describe('sell-ready checkout, mail, and bid checks', { concurrency: false }, ()
     assert.equal(JSON.stringify(secondResult).includes('synthetic-buyer@example.test'), false);
   });
 
+  test('webhook retry sends the same Resend request after an ambiguous first send', async () => {
+    const created = await handleCheckout({
+      tier: 'single', bidText: MATCH, side: 'receiving', consent: true,
+    });
+    const bid = await doubles.store.getBid(created.json.bidId);
+    const signed = sign(completedEvent({
+      id: 'evt_resend_retry', sessionId: bid.sessionId, bidId: bid.bidId,
+    }));
+    let reviews = 0;
+    setModelClientForTests(async () => ({ summary: `Model review ${++reviews}` }));
+    process.env.RESEND_API_KEY = 're_test_inert';
+    process.env.RESEND_FROM = 'reviews@example.test';
+    const originalFetch = global.fetch;
+    const requests = [];
+    global.fetch = async (url, init) => {
+      requests.push({ key: init.headers['Idempotency-Key'], body: init.body });
+      if (requests.length === 1) throw new Error('Connection closed after send');
+      const sameRequest = requests[1].key === requests[0].key && requests[1].body === requests[0].body;
+      return { ok: sameRequest, status: sameRequest ? 200 : 409, json: async () => ({ id: 'email_retry' }) };
+    };
+    try {
+      assert.equal((await handleWebhook(signed.payload, signed.header)).status, 500);
+      process.env.RESEND_FROM = 'new-sender@example.test';
+      assert.equal((await handleWebhook(signed.payload, signed.header)).status, 200);
+      assert.equal(reviews, 1);
+      assert.equal(requests.length, 2);
+      assert.deepEqual(requests[0], requests[1]);
+      assert.match(JSON.parse(requests[0].body).text, /Model review 1/);
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
   test('Resend transport posts to the configured host with an idempotency key and never uses the public route', async () => {
     const calls = [];
     const originalFetch = global.fetch;

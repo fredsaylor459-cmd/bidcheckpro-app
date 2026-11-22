@@ -12,6 +12,22 @@ const MISMATCH = [
 ].join('\n');
 
 describe('bid arithmetic', () => {
+  test('signed dollar discounts and accounting credits reduce the line-item sum', () => {
+    for (const credit of ['-$20.50', '$-20.50', '−$20.50', '($20.50)']) {
+      const result = checkBidArithmetic(['Labor $100', `Credit ${credit}`, 'Total $79.50'].join('\n'));
+      assert.equal(result.sumCents, 7950);
+      assert.equal(result.statedCents, 7950);
+      assert.deepEqual(result.flags, []);
+    }
+  });
+
+  test('negative quantities are not needed to reconcile a per-unit credit or negative total', () => {
+    const result = checkBidArithmetic('Credit 2 ea -$0.50 -$1.00\nBalance due -1.00');
+    assert.equal(result.sumCents, -100);
+    assert.equal(result.statedCents, -100);
+    assert.deepEqual(result.flags, []);
+  });
+
   test('flags a stated total that does not match the line items, 2160 vs 2660', () => {
     const result = checkBidArithmetic(MISMATCH);
     assert.equal(result.sumCents, 216000);

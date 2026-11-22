@@ -13,6 +13,7 @@ const { createPostgresFulfillmentStore } = require('../lib/postgres-store');
 const { setFulfillmentStoreForTests } = require('../lib/store');
 const { setCheckoutGatewayForTests } = require('../lib/stripe-gateway');
 const { setEmailTransportForTests } = require('../lib/email');
+const { setModelClientForTests } = require('../lib/model-client');
 const { hashAccessToken } = require('../lib/tokens');
 const { handleCheckout, handleWebhook, handleSendEmail } = require('../lib/handlers');
 const {
@@ -72,6 +73,7 @@ describe('local PostgreSQL fulfillment', { concurrency: false }, () => {
     setCheckoutGatewayForTests(gateway);
     setFulfillmentStoreForTests(store);
     setEmailTransportForTests(null);
+    setModelClientForTests(null);
     delete process.env.EMAIL_DELIVERY_ENABLED;
   });
 
@@ -159,6 +161,8 @@ describe('local PostgreSQL fulfillment', { concurrency: false }, () => {
       consent: true,
     });
     const bid = await store.getBid(created.json.bidId);
+    let reviews = 0;
+    setModelClientForTests(async () => ({ summary: `Model review ${++reviews}` }));
     const logical = new Map();
     let invocations = 0;
     setEmailTransportForTests({
@@ -166,9 +170,10 @@ describe('local PostgreSQL fulfillment', { concurrency: false }, () => {
         invocations += 1;
         assert.equal(message.idempotencyKey, 'fulfillment:evt_pg_crash');
         if (logical.has(message.idempotencyKey)) {
-          return { id: logical.get(message.idempotencyKey), duplicate: true };
+          assert.deepEqual(message, logical.get(message.idempotencyKey));
+          return { id: 'email_logical_1', duplicate: true };
         }
-        logical.set(message.idempotencyKey, 'email_logical_1');
+        logical.set(message.idempotencyKey, message);
         const error = new Error('accepted then killed before database acknowledgement');
         error.accepted = true;
         error.code = 'crash_after_accept';
@@ -186,10 +191,19 @@ describe('local PostgreSQL fulfillment', { concurrency: false }, () => {
     assert.equal(crashed.json.code, 'delivery_unacked');
     assert.equal((await store.getEvent('evt_pg_crash')).deliveryStatus, 'accepted_unacked');
 
-    const retried = await handleWebhook(signed.payload, signed.header);
+    const retryStore = createPostgresFulfillmentStore({ connectionString: databaseUrl });
+    let retried;
+    try {
+      setFulfillmentStoreForTests(retryStore);
+      retried = await handleWebhook(signed.payload, signed.header);
+    } finally {
+      setFulfillmentStoreForTests(store);
+      await retryStore.close();
+    }
     assert.equal(retried.status, 200);
     assert.equal((await store.getEvent('evt_pg_crash')).deliveryStatus, 'sent');
     assert.equal(logical.size, 1);
+    assert.equal(reviews, 1);
     assert.equal(invocations, 2);
     const replay = await handleWebhook(signed.payload, signed.header);
     assert.equal(replay.json.duplicate, true);

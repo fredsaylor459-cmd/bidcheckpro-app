@@ -1,6 +1,6 @@
 # PostgreSQL fulfillment store
 
-`FULFILLMENT_DATABASE_URL` accepts a local or hosted `postgres://` / `postgresql://` URL, including Neon. A non-local host must use TLS (`sslmode=require`). `sslmode=disable` on a remote host is refused. When the variable is unset or invalid, checkout, paid review, and webhooks return 503 and the error names `FULFILLMENT_DATABASE_URL`. No connection is opened in that case.
+`FULFILLMENT_DATABASE_URL` accepts a local or hosted `postgres://` / `postgresql://` URL, including Neon. A non-local host must use TLS (`sslmode=require`). `sslmode=disable` and `ssl=0` on a remote host are refused. When the variable is unset or invalid, checkout, paid review, and webhooks return 503 and the error names `FULFILLMENT_DATABASE_URL`. No connection is opened in that case.
 
 Prices are fixed in `lib/offers.js`: single $79 (7900), compare $149 (14900), full project $359 (35900). `POST /api/send-email` stays closed. Customer mail is sent only from the paid webhook when `RESEND_API_KEY` and `RESEND_FROM` are set. Resend is asked to dedupe `provider_idempotency_key` via the `Idempotency-Key` header. One checkout session is claimed once, even if Stripe delivers a second event id.
 
@@ -40,7 +40,7 @@ Create `bidcheckpro_app` first, as shown in `db/grants.sql`. The running app sho
 
 The database cannot make an external email exactly once.
 
-If the provider accepts a message and the process dies before the ledger commits `delivery_status = sent`, the row remains `sending` or, when the handler observed the acceptance, `accepted_unacked`. A later retry calls the provider again with the same `provider_idempotency_key`. That is at-least-once delivery of the API call.
+If the provider accepts a message and the process dies before the ledger commits `delivery_status = sent`, the row remains `sending` or, when the handler observed the acceptance, `accepted_unacked`. Before the first send, the webhook saves the subject, text, HTML, and configured sender with the consented bid. A later retry reuses that snapshot and the same `provider_idempotency_key`. Run migrations before deploying the webhook so the snapshot column is available. That is at-least-once delivery of the API call.
 
 Exactly once requires the provider to treat that key as idempotent and a reconciliation job for keys left in `sending` or `accepted_unacked`. Resend is called with that key as `Idempotency-Key`. Email delivery here is not exactly-once.
 

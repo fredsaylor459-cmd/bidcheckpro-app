@@ -564,6 +564,19 @@ describe('prelaunch fulfillment gates', { concurrency: false }, () => {
     assert.match(cleartext.error, /TLS/);
     assert.equal(cleartext.error.includes('secret'), false);
 
+    for (const url of [
+      'postgresql://db.example.test/fulfillment?ssl=0',
+      'postgresql://db.example.test/fulfillment?ssl=true&ssl=0',
+      'postgresql://db.example.test/fulfillment?ssl=',
+      'postgresql://localhost/fulfillment?host=db.example.test&ssl=0',
+    ]) {
+      const disabled = describeDatabaseUrl(url);
+      assert.equal(disabled.ok, false, url);
+      assert.match(disabled.error, /TLS/);
+    }
+    assert.equal(describeDatabaseUrl('postgresql://localhost/fulfillment?ssl=0').ok, true);
+    assert.equal(describeDatabaseUrl('postgresql:///fulfillment?host=/tmp&ssl=0').local, true);
+
     const missing = describeDatabaseUrl('');
     assert.equal(missing.ok, false);
     assert.match(missing.error, /FULFILLMENT_DATABASE_URL/);
